@@ -73,6 +73,12 @@ public class LeasedPlcConnection implements PlcConnection {
         // Cancel automatically timing out.
         usageTimer.cancel();
 
+        try {
+            connection.get().close();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
         // Make the connection unusable.
         connection.set(null);
 

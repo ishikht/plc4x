@@ -25,6 +25,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,6 +36,7 @@ import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
+import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
@@ -131,9 +133,11 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 				final Map<String, PlcTag> tags = getSchemaCache().retrieveTags(addressMap);
 				PlcReadRequest readRequest;
 				Long nrOfRowsHere;
+                PlcConnection connection = null;
 
-				try (PlcConnection connection = getConnectionManager().getConnection(getConnectionString(context, originalFlowFile))) {
-					
+				try  {
+                    connection = getConnectionManager().getConnection(getConnectionString(context, originalFlowFile));
+
 					readRequest =  getReadRequest(logger, addressMap, tags, connection);
 					
 					PlcReadResponse readResponse = readRequest.execute().get(getTimeout(context, originalFlowFile), TimeUnit.MILLISECONDS);
@@ -142,15 +146,27 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 
 				} catch (TimeoutException e) {
 					logger.error("Timeout reading the data from PLC", e);
-					getConnectionManager().removeCachedConnection(getConnectionString(context, originalFlowFile));
 					throw new ProcessException(e);
+				} catch (ExecutionException e) {
+                    logger.error("Execution exception reading the data from PLC", e);
+                    throw new ProcessException(e);
 				} catch (PlcConnectionException e) {
 					logger.error("Error getting the PLC connection", e);
 					throw new ProcessException("Got an a PlcConnectionException while trying to get a connection", e);
 				} catch (Exception e) {
 					logger.error("Exception reading the data from PLC", e);
 					throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
-				}
+				}finally {
+                    if (connection != null){
+                        try {
+                            logger.debug("Closing connection");
+                            connection.close();
+                            getConnectionManager().removeCachedConnection(getConnectionString(context, originalFlowFile));
+                        } catch (Exception ex) {
+                            logger.debug("Closing connection, failed to close connection.", ex);
+                        }
+                    }
+                }
 
 				if (recordSchema == null){
 					if (debugEnabled)
@@ -199,5 +215,22 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 		}
 		session.transfer(resultSetFF, REL_SUCCESS);
 	}
+
+    @OnUnscheduled
+    public void onUnscheduled(){
+        final ComponentLog logger = getLogger();
+
+        var connections = getConnectionManager().getCachedConnections();
+
+        connections.forEach(connectionUrl -> {
+            try {
+                logger.debug("Closing " + connectionUrl);
+                var connection = getConnectionManager().getConnection(connectionUrl);
+                connection.close();
+            }  catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
 
 }

@@ -61,7 +61,7 @@ public class SchemaCache {
      * @param schema record schema used for PlcResponse serialization. Can be null
      */
     public void addSchema(final Map<String,String> schemaIdentifier, final Set<String> tagsNames, final List<? extends PlcTag> tagsList,  final RecordSchema schema) {        
-        if (!schemaMap.containsKey(schemaIdentifier.toString())){
+        if (!schemaMap.containsKey(schemaIdentifier.toString()) && cacheSize.get() != 0){
             if (nextSchemaPosition.get() == cacheSize.get()){
                 nextSchemaPosition.set(0);
             }

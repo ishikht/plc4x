@@ -18,6 +18,8 @@
  */
 package org.apache.plc4x.nifi;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -38,6 +40,7 @@ import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
+import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
@@ -126,8 +129,11 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 						final Map<String,String> addressMap = getPlcAddressMap(context, fileToProcess);
 						final Map<String, PlcTag> tags = getSchemaCache().retrieveTags(addressMap);
 
-						try (PlcConnection connection = getConnectionManager().getConnection(getConnectionString(context, fileToProcess))) {
-							
+                        PlcConnection connection = null;
+
+						try {
+
+                            connection = getConnectionManager().getConnection(getConnectionString(context, fileToProcess));
 							writeRequest = getWriteRequest(logger, addressMap, tags, record.toMap(), connection, nrOfRowsHere);
 
 							PlcWriteResponse plcWriteResponse = writeRequest.execute().get(getTimeout(context, fileToProcess), TimeUnit.MILLISECONDS);
@@ -137,7 +143,6 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 
 						} catch (TimeoutException e) {
 							logger.error("Timeout writting the data to the PLC", e);
-							getConnectionManager().removeCachedConnection(getConnectionString(context, fileToProcess));
 							throw new ProcessException(e);
 						} catch (PlcConnectionException e) {
 							logger.error("Error getting the PLC connection", e);
@@ -145,7 +150,17 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 						} catch (Exception e) {
 							logger.error("Exception writting the data to the PLC", e);
 							throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
-						}
+						}finally {
+                            logger.debug("Closing connection");
+                            if (connection != null){
+                                try {
+                                    connection.close();
+                                    getConnectionManager().removeCachedConnection(getConnectionString(context, fileToProcess));
+                                } catch (Exception ex) {
+                                    logger.debug("Closing connection, failed to close connection.", ex);
+                                }
+                            }
+                        }
 							
 						if (tags == null){
 							if (debugEnabled)
@@ -192,4 +207,21 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 			session.getProvenanceReporter().receive(fileToProcess, "Writted " + nrOfRows.get() + " rows", executionTimeElapsed);
 		}
 	}
+
+    @OnUnscheduled
+    public void onUnscheduled(){
+        final ComponentLog logger = getLogger();
+
+        var connections = getConnectionManager().getCachedConnections();
+
+        connections.forEach(connectionUrl -> {
+            try {
+                logger.debug("Closing " + connectionUrl);
+                var connection = getConnectionManager().getConnection(connectionUrl);
+                connection.close();
+            }  catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
 }
