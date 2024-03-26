@@ -146,16 +146,18 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
                             logger.debug("Removing connection for: " + connectionString);
                             getConnectionManager().removeCachedConnection(connectionString);
 							throw new ProcessException(e);
-                        } catch (ExecutionException e) {
-                            logger.error("Execution exception reading the data from PLC", e);
-                            Throwable cause = e.getCause();
-                            if (cause instanceof TimeoutException) {
-                                var connectionString = getConnectionString(context, fileToProcess);
-                                logger.debug("Removing connection for: " + connectionString);
-                                getConnectionManager().removeCachedConnection(connectionString);
-                            }
-                            throw new ProcessException(e);
-						} catch (PlcConnectionException e) {
+                        }
+//                        catch (ExecutionException e) {
+//                            logger.error("Execution exception reading the data from PLC", e);
+//                            Throwable cause = e.getCause();
+//                            if (cause instanceof TimeoutException) {
+//                                var connectionString = getConnectionString(context, fileToProcess);
+//                                logger.debug("Removing connection for: " + connectionString);
+//                                getConnectionManager().removeCachedConnection(connectionString);
+//                            }
+//                            throw new ProcessException(e);
+//						}
+                        catch (PlcConnectionException e) {
 							logger.error("Error getting the PLC connection", e);
 							throw new ProcessException("Got an a PlcConnectionException while trying to get a connection", e);
 						} catch (Exception e) {
