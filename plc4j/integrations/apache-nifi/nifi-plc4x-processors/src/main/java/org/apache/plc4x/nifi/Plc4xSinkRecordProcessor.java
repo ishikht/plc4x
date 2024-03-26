@@ -27,6 +27,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -145,17 +146,20 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
                             logger.debug("Removing connection for: " + connectionString);
                             getConnectionManager().removeCachedConnection(connectionString);
 							throw new ProcessException(e);
+                        } catch (ExecutionException e) {
+                            logger.error("Execution exception reading the data from PLC", e);
+                            Throwable cause = e.getCause();
+                            if (cause instanceof TimeoutException) {
+                                var connectionString = getConnectionString(context, fileToProcess);
+                                logger.debug("Removing connection for: " + connectionString);
+                                getConnectionManager().removeCachedConnection(connectionString);
+                            }
+                            throw new ProcessException(e);
 						} catch (PlcConnectionException e) {
 							logger.error("Error getting the PLC connection", e);
-                            var connectionString = getConnectionString(context, fileToProcess);
-                            logger.debug("Removing connection for: " + connectionString);
-                            getConnectionManager().removeCachedConnection(connectionString);
 							throw new ProcessException("Got an a PlcConnectionException while trying to get a connection", e);
 						} catch (Exception e) {
 							logger.error("Exception writting the data to the PLC", e);
-                            var connectionString = getConnectionString(context, fileToProcess);
-                            logger.debug("Removing connection for: " + connectionString);
-                            getConnectionManager().removeCachedConnection(connectionString);
 							throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
 						}
 							

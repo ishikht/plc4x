@@ -138,9 +138,9 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 				try (PlcConnection connection = getConnectionManager().getConnection(getConnectionString(context, originalFlowFile)))  {
 
 					readRequest =  getReadRequest(logger, addressMap, tags, connection);
-					
+
 					PlcReadResponse readResponse = readRequest.execute().get(getTimeout(context, originalFlowFile), TimeUnit.MILLISECONDS);
-							
+
 					nrOfRowsHere = evaluateReadResponse(context, logger, originalFlowFile, plc4xWriter, out, recordSchema, readResponse);
 
 				} catch (TimeoutException e) {
@@ -151,21 +151,18 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 					throw new ProcessException(e);
 				} catch (ExecutionException e) {
                     logger.error("Execution exception reading the data from PLC", e);
-                    var connectionString = getConnectionString(context, originalFlowFile);
-                    logger.debug("Removing connection for: " + connectionString);
-                    getConnectionManager().removeCachedConnection(connectionString);
+                    Throwable cause = e.getCause();
+                    if (cause instanceof TimeoutException) {
+                        var connectionString = getConnectionString(context, originalFlowFile);
+                        logger.debug("Removing connection for: " + connectionString);
+                        getConnectionManager().removeCachedConnection(connectionString);
+                    }
                     throw new ProcessException(e);
 				} catch (PlcConnectionException e) {
 					logger.error("Error getting the PLC connection", e);
-                    var connectionString = getConnectionString(context, originalFlowFile);
-                    logger.debug("Removing connection for: " + connectionString);
-                    getConnectionManager().removeCachedConnection(connectionString);
 					throw new ProcessException("Got an a PlcConnectionException while trying to get a connection", e);
 				} catch (Exception e) {
 					logger.error("Exception reading the data from PLC", e);
-                    var connectionString = getConnectionString(context, originalFlowFile);
-                    logger.debug("Closing connection for: " + connectionString);
-                    getConnectionManager().removeCachedConnection(connectionString);
 					throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
 				}
 
