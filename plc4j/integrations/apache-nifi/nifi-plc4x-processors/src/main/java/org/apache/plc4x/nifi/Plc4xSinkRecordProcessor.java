@@ -59,6 +59,7 @@ import org.apache.plc4x.java.api.exceptions.PlcConnectionException;
 import org.apache.plc4x.java.api.messages.PlcWriteRequest;
 import org.apache.plc4x.java.api.messages.PlcWriteResponse;
 import org.apache.plc4x.java.api.model.PlcTag;
+import org.apache.plc4x.java.utils.cache.LeasedPlcConnection;
 
 @TriggerSerially
 @Tags({"plc4x", "put", "sink", "record"})
@@ -129,11 +130,8 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 						final Map<String,String> addressMap = getPlcAddressMap(context, fileToProcess);
 						final Map<String, PlcTag> tags = getSchemaCache().retrieveTags(addressMap);
 
-                        PlcConnection connection = null;
+						try (PlcConnection connection = getConnectionManager().getConnection(getConnectionString(context, fileToProcess))){
 
-						try {
-
-                            connection = getConnectionManager().getConnection(getConnectionString(context, fileToProcess));
 							writeRequest = getWriteRequest(logger, addressMap, tags, record.toMap(), connection, nrOfRowsHere);
 
 							PlcWriteResponse plcWriteResponse = writeRequest.execute().get(getTimeout(context, fileToProcess), TimeUnit.MILLISECONDS);
@@ -143,24 +141,23 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 
 						} catch (TimeoutException e) {
 							logger.error("Timeout writting the data to the PLC", e);
+                            var connectionString = getConnectionString(context, fileToProcess);
+                            logger.debug("Removing connection for: " + connectionString);
+                            getConnectionManager().removeCachedConnection(connectionString);
 							throw new ProcessException(e);
 						} catch (PlcConnectionException e) {
 							logger.error("Error getting the PLC connection", e);
+                            var connectionString = getConnectionString(context, fileToProcess);
+                            logger.debug("Removing connection for: " + connectionString);
+                            getConnectionManager().removeCachedConnection(connectionString);
 							throw new ProcessException("Got an a PlcConnectionException while trying to get a connection", e);
 						} catch (Exception e) {
 							logger.error("Exception writting the data to the PLC", e);
+                            var connectionString = getConnectionString(context, fileToProcess);
+                            logger.debug("Removing connection for: " + connectionString);
+                            getConnectionManager().removeCachedConnection(connectionString);
 							throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
-						}finally {
-                            logger.debug("Closing connection");
-                            if (connection != null){
-                                try {
-                                    connection.close();
-                                    getConnectionManager().removeCachedConnection(getConnectionString(context, fileToProcess));
-                                } catch (Exception ex) {
-                                    logger.debug("Closing connection, failed to close connection.", ex);
-                                }
-                            }
-                        }
+						}
 							
 						if (tags == null){
 							if (debugEnabled)
@@ -217,8 +214,8 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
         connections.forEach(connectionUrl -> {
             try {
                 logger.debug("Closing " + connectionUrl);
-                var connection = getConnectionManager().getConnection(connectionUrl);
-                connection.close();
+                var connection = (LeasedPlcConnection)getConnectionManager().getConnection(connectionUrl);
+                connection.close(true);
             }  catch (Exception e) {
                 throw new RuntimeException(e);
             }
