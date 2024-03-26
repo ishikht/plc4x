@@ -59,6 +59,10 @@ public class LeasedPlcConnection implements PlcConnection {
 
     @Override
     public synchronized void close() {
+        close(false);
+    }
+
+    public synchronized void close(boolean force){
         // In this case the connection was already closed (possibly by the timer)
         if(connection.get() == null) {
             return;
@@ -66,6 +70,16 @@ public class LeasedPlcConnection implements PlcConnection {
 
         // Cancel automatically timing out.
         usageTimer.cancel();
+
+        if (force){
+            var plcConnection = connection.get();
+            try {
+                plcConnection.close();
+            } catch (Exception e) {
+                // handle
+            }
+        }
+
 
         // Make the connection unusable.
         connection.set(null);

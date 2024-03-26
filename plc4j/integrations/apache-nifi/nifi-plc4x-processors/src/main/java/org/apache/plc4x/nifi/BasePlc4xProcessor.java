@@ -103,7 +103,7 @@ public abstract class BasePlc4xProcessor extends AbstractProcessor {
 		.defaultValue("1")
 		.required(true)
         .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
-		.addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
+		.addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
 		.build();
 
     public static final PropertyDescriptor PLC_FUTURE_TIMEOUT_MILISECONDS = new PropertyDescriptor.Builder()

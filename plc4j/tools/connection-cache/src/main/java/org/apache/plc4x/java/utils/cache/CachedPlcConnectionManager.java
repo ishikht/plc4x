@@ -73,6 +73,16 @@ public class CachedPlcConnectionManager implements PlcConnectionManager {
      */
     public void removeCachedConnection(String url) {
         synchronized (connectionContainers) {
+            var connectionContainer = connectionContainers.get(url);
+            if (connectionContainer != null){
+                try {
+                    var connection = (LeasedPlcConnection)getConnection(url);
+                    connection.close(true);
+                } catch (Exception e) {
+                    LOG.debug("Failed to close connection", e);
+                }
+            }
+
             connectionContainers.remove(url);
         }
     }

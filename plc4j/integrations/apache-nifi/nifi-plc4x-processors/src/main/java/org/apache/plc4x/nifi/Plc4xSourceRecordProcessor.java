@@ -35,6 +35,7 @@ import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
+import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
@@ -52,6 +53,7 @@ import org.apache.plc4x.java.api.exceptions.PlcConnectionException;
 import org.apache.plc4x.java.api.messages.PlcReadRequest;
 import org.apache.plc4x.java.api.messages.PlcReadResponse;
 import org.apache.plc4x.java.api.model.PlcTag;
+import org.apache.plc4x.java.utils.cache.LeasedPlcConnection;
 import org.apache.plc4x.nifi.record.Plc4xWriter;
 import org.apache.plc4x.nifi.record.RecordPlc4xWriter;
 
@@ -199,5 +201,18 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 		}
 		session.transfer(resultSetFF, REL_SUCCESS);
 	}
+
+    @OnUnscheduled
+    public void onUnscheduled(){
+       var connections = getConnectionManager().getCachedConnections();
+       connections.forEach(connectionUrl -> {
+           try {
+              var connection = (LeasedPlcConnection) getConnectionManager().getConnection(connectionUrl);
+              connection.close(true);
+           } catch (PlcConnectionException e) {
+               // log error
+           }
+       });
+    }
 
 }

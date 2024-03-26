@@ -46,10 +46,10 @@ export interface DeviceEvent extends UiApplicationEvent<Device> {
 }
 
 export interface PlcDriverMetadata {
-    protocolConfigurationOptionMetadata?: OptionMetadata;
     discoverySupported: boolean;
-    supportedTransportCodes: string[];
+    protocolConfigurationOptionMetadata?: OptionMetadata;
     defaultTransportCode?: string;
+    supportedTransportCodes: string[];
 }
 
 export interface ApplicationEvent extends EventObject {
@@ -69,8 +69,8 @@ export interface Option {
     key: string;
     type: OptionType;
     defaultValue?: any;
-    required: boolean;
     description: string;
+    required: boolean;
 }
 
 export interface Serializable {
