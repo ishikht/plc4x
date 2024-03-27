@@ -38,6 +38,7 @@ import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
+import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
@@ -56,6 +57,7 @@ import org.apache.plc4x.java.api.exceptions.PlcConnectionException;
 import org.apache.plc4x.java.api.messages.PlcWriteRequest;
 import org.apache.plc4x.java.api.messages.PlcWriteResponse;
 import org.apache.plc4x.java.api.model.PlcTag;
+import org.apache.plc4x.java.utils.cache.LeasedPlcConnection;
 
 @TriggerSerially
 @Tags({"plc4x", "put", "sink", "record"})
@@ -104,7 +106,7 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
         if (fileToProcess == null) {
             return;
         }
-			
+
 		final ComponentLog logger = getLogger();
 
 		// Get an instance of a component able to read from a PLC.
@@ -114,7 +116,7 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 		try {
 			session.read(fileToProcess, in -> {
 				Record record = null;
-			
+
 				try (RecordReader recordReader = context.getProperty(PLC_RECORD_READER_FACTORY)
 					.asControllerService(RecordReaderFactory.class)
 					.createRecordReader(fileToProcess, in, logger)){
@@ -127,7 +129,7 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 						final Map<String, PlcTag> tags = getSchemaCache().retrieveTags(addressMap);
 
 						try (PlcConnection connection = getConnectionManager().getConnection(getConnectionString(context, fileToProcess))) {
-							
+
 							writeRequest = getWriteRequest(logger, addressMap, tags, record.toMap(), connection, nrOfRowsHere);
 
 							PlcWriteResponse plcWriteResponse = writeRequest.execute().get(getTimeout(context, fileToProcess), TimeUnit.MILLISECONDS);
@@ -136,7 +138,7 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 							evaluateWriteResponse(logger, record.toMap(), plcWriteResponse);
 
 						} catch (TimeoutException e) {
-							logger.error("Timeout writting the data to the PLC", e);
+							logger.error("Timeout writing the data to the PLC", e);
 							getConnectionManager().removeCachedConnection(getConnectionString(context, fileToProcess));
 							throw new ProcessException(e);
 						} catch (PlcConnectionException e) {
@@ -146,12 +148,12 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 							logger.error("Exception writting the data to the PLC", e);
 							throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
 						}
-							
+
 						if (tags == null){
 							if (debugEnabled)
 								logger.debug("Adding PlcTypes resolution into cache with key: " + addressMap);
 							getSchemaCache().addSchema(
-								addressMap, 
+								addressMap,
 								writeRequest.getTagNames(),
 								writeRequest.getTags(),
 								null
@@ -159,11 +161,11 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 						}
 						nrOfRows.getAndAdd(nrOfRowsHere.get());
 
-						
+
 					}
 				} catch (Exception e) {
 					throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
-				} 
+				}
 			});
 
 		} catch (ProcessException e) {
@@ -171,8 +173,9 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 			session.putAttribute(fileToProcess, EXCEPTION, e.getLocalizedMessage());
 			session.transfer(fileToProcess, REL_FAILURE);
 			session.commitAsync();
+            closeConnections();
 			throw e;
-		} 
+		}
 
 
 		long executionTimeElapsed = executeTime.getElapsed(TimeUnit.MILLISECONDS);
@@ -191,5 +194,24 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 		} else {
 			session.getProvenanceReporter().receive(fileToProcess, "Writted " + nrOfRows.get() + " rows", executionTimeElapsed);
 		}
+
+        closeConnections();
 	}
+
+    @OnUnscheduled
+    public void onUnscheduled(){
+        closeConnections();
+    }
+
+    private void closeConnections() {
+        var connections = getConnectionManager().getCachedConnections();
+        connections.forEach(connectionUrl -> {
+            try {
+                var connection = (LeasedPlcConnection) getConnectionManager().getConnection(connectionUrl);
+                connection.close(true);
+            } catch (PlcConnectionException e) {
+                // log error
+            }
+        });
+    }
 }
