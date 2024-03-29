@@ -48,6 +48,7 @@ import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
+import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.serialization.RecordReader;
 import org.apache.nifi.serialization.RecordReaderFactory;
 import org.apache.nifi.serialization.record.Record;
@@ -86,6 +87,19 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 			.required(true)
 			.build();
 
+    public static final PropertyDescriptor PLC_CONNECTIONS_KEEP_ALIVE = new PropertyDescriptor.Builder()
+        .name("plc4x-connections-keep-alive")
+        .displayName("Keep connections alive")
+        .description( "Do not close connections, only on error, or when processor is stopped.")
+        .defaultValue("true")
+        .required(true)
+        .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
+        .allowableValues("true", "false")
+        .build();
+
+    public boolean getConnectionsKeepAlive(ProcessContext context) {
+        return context.getProperty(PLC_CONNECTIONS_KEEP_ALIVE).asBoolean();
+    }
 
 	@Override
 	protected void init(final ProcessorInitializationContext context) {
@@ -95,6 +109,7 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 
         final List<PropertyDescriptor> pds = new ArrayList<>(super.getSupportedPropertyDescriptors());
 		pds.add(PLC_RECORD_READER_FACTORY);
+        pds.add(PLC_CONNECTIONS_KEEP_ALIVE);
 		this.properties = Collections.unmodifiableList(pds);
 	}
 
@@ -173,7 +188,9 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 			session.putAttribute(fileToProcess, EXCEPTION, e.getLocalizedMessage());
 			session.transfer(fileToProcess, REL_FAILURE);
 			session.commitAsync();
-            closeConnections();
+            if (!getConnectionsKeepAlive(context)){
+                closeConnections();
+            }
 			throw e;
 		}
 
@@ -195,7 +212,9 @@ public class Plc4xSinkRecordProcessor extends BasePlc4xProcessor {
 			session.getProvenanceReporter().receive(fileToProcess, "Writted " + nrOfRows.get() + " rows", executionTimeElapsed);
 		}
 
-        closeConnections();
+        if (!getConnectionsKeepAlive(context)){
+            closeConnections();
+        }
 	}
 
     @OnUnscheduled

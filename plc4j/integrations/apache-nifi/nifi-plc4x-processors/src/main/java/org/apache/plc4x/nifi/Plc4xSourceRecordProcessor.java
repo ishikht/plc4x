@@ -37,6 +37,7 @@ import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
 import org.apache.nifi.annotation.lifecycle.OnUnscheduled;
 import org.apache.nifi.components.PropertyDescriptor;
+import org.apache.nifi.expression.ExpressionLanguageScope;
 import org.apache.nifi.flowfile.FlowFile;
 import org.apache.nifi.flowfile.attributes.CoreAttributes;
 import org.apache.nifi.logging.ComponentLog;
@@ -45,6 +46,7 @@ import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.ProcessorInitializationContext;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
+import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.serialization.RecordSetWriterFactory;
 import org.apache.nifi.serialization.record.RecordSchema;
 import org.apache.nifi.util.StopWatch;
@@ -80,7 +82,21 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 		.identifiesControllerService(RecordSetWriterFactory.class)
 		.required(true)
 		.build();
-	
+
+    public static final PropertyDescriptor PLC_CONNECTIONS_KEEP_ALIVE = new PropertyDescriptor.Builder()
+        .name("plc4x-connections-keep-alive")
+        .displayName("Keep connections alive")
+        .description( "Do not close connections, only on error, or when processor is stopped.")
+        .defaultValue("true")
+        .required(true)
+        .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
+        .allowableValues("true", "false")
+        .build();
+
+    public boolean getConnectionsKeepAlive(ProcessContext context) {
+        return context.getProperty(PLC_CONNECTIONS_KEEP_ALIVE).asBoolean();
+    }
+
 	@Override
 	protected void init(final ProcessorInitializationContext context) {
 		super.init(context);
@@ -89,6 +105,7 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 
         final List<PropertyDescriptor> pds = new ArrayList<>(super.getSupportedPropertyDescriptors());
 		pds.add(PLC_RECORD_WRITER_FACTORY);
+        pds.add(PLC_CONNECTIONS_KEEP_ALIVE);
 		this.properties = Collections.unmodifiableList(pds);
 	}
 
@@ -176,6 +193,9 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 			}
 			session.remove(resultSetFF);
 			session.commitAsync();
+            if (!getConnectionsKeepAlive(context)){
+                closeConnections();
+            }
 			throw (e instanceof ProcessException) ? (ProcessException) e : new ProcessException(e);
 		}
 
@@ -200,19 +220,26 @@ public class Plc4xSourceRecordProcessor extends BasePlc4xProcessor {
 			session.remove(fileToProcess);
 		}
 		session.transfer(resultSetFF, REL_SUCCESS);
+        if (!getConnectionsKeepAlive(context)){
+            closeConnections();
+        }
 	}
 
     @OnUnscheduled
     public void onUnscheduled(){
-       var connections = getConnectionManager().getCachedConnections();
-       connections.forEach(connectionUrl -> {
-           try {
-              var connection = (LeasedPlcConnection) getConnectionManager().getConnection(connectionUrl);
-              connection.close(true);
-           } catch (PlcConnectionException e) {
-               // log error
-           }
-       });
+        closeConnections();
+    }
+
+    private void closeConnections() {
+        var connections = getConnectionManager().getCachedConnections();
+        connections.forEach(connectionUrl -> {
+            try {
+               var connection = (LeasedPlcConnection) getConnectionManager().getConnection(connectionUrl);
+               connection.close(true);
+            } catch (PlcConnectionException e) {
+                // log error
+            }
+        });
     }
 
 }
