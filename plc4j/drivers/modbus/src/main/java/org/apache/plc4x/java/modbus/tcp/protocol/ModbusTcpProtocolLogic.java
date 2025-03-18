@@ -50,7 +50,10 @@ public class ModbusTcpProtocolLogic extends ModbusProtocolLogic<ModbusTcpADU> im
         this.requestTimeout = Duration.ofMillis(configuration.getRequestTimeout());
         this.unitIdentifier = (short) configuration.getUnitIdentifier();
         this.pingAddress = new ModbusTagHandler().parseTag(configuration.getPingAddress());
-        this.tm = new RequestTransactionManager(1);
+        if (this.tm != null) {
+            this.tm.shutdown();
+        }
+        this.tm = new RequestTransactionManager(1, "modbus");
     }
 
     @Override

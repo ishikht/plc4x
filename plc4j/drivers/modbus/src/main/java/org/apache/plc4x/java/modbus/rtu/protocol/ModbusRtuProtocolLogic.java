@@ -48,6 +48,9 @@ public class ModbusRtuProtocolLogic extends ModbusProtocolLogic<ModbusRtuADU> im
     public void setConfiguration(ModbusRtuConfiguration configuration) {
         this.requestTimeout = Duration.ofMillis(configuration.getRequestTimeout());
         this.unitIdentifier = (short) configuration.getUnitIdentifier();
+        if (this.tm != null) {
+            this.tm.shutdown();
+        }
         this.tm = new RequestTransactionManager(1);
     }
 

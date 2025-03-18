@@ -25,11 +25,7 @@ import org.slf4j.MDC;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.apache.commons.lang3.concurrent.BasicThreadFactory;
@@ -51,12 +47,35 @@ public class RequestTransactionManager {
     /** Executor that performs all operations */
     //static final ExecutorService executor = Executors.newScheduledThreadPool(4);
 
-    final ExecutorService executor = Executors.newFixedThreadPool(4, new BasicThreadFactory.Builder()
-                                                    .namingPattern("plc4x-tm-thread-%d")
-                                                    .daemon(true)
-                                                    .priority(Thread.MAX_PRIORITY)
-                                                    .build());    
-    
+//    final ExecutorService executor = Executors.newFixedThreadPool(4, new BasicThreadFactory.Builder()
+//                                                    .namingPattern("plc4x-tm-thread-%d")
+//                                                    .daemon(true)
+//                                                    .priority(Thread.MAX_PRIORITY)
+//                                                    .build());
+
+    private ExecutorService executor = null; // Not created yet
+    private final long idleTimeoutMillis = 5_000; // e.g. 5 sec
+    private long maxOperationTimeMillis = 3 * 60_000; // e.g. 3 minutes
+    private volatile long lastUsageTime = 0;
+    private ScheduledExecutorService watchdog;
+
+    // Only create a small static or single scheduled executor to watch for inactivity
+    private static final ScheduledExecutorService MONITOR_EXECUTOR = Executors.newSingleThreadScheduledExecutor(
+        new BasicThreadFactory.Builder()
+            .namingPattern("plc4x-tm-inactivity-monitor-%d")
+            .daemon(true)
+            .build()
+    );
+
+    private static final ScheduledExecutorService TIMEOUT_SCHEDULER =
+        Executors.newSingleThreadScheduledExecutor(
+            new BasicThreadFactory.Builder()
+                .namingPattern("plc4x-tm-per-transaction-timeout-%d")
+                .daemon(true)
+                .priority(Thread.MAX_PRIORITY)
+                .build()
+        );
+
     private final Set<RequestTransaction> runningRequests;
     /** How many Transactions are allowed to run at the same time? */
     private int numberOfConcurrentRequests;
@@ -65,14 +84,53 @@ public class RequestTransactionManager {
     /** Important, this is a FIFO Queue for Fairness! */
     private final Queue<RequestTransaction> workLog = new ConcurrentLinkedQueue<>();
 
-    public RequestTransactionManager(int numberOfConcurrentRequests) {
+    private final String protocolName;
+
+    public RequestTransactionManager(int numberOfConcurrentRequests, String protocol) {
+        this.protocolName = protocol;
         this.numberOfConcurrentRequests = numberOfConcurrentRequests;
         // Immutable Map
         runningRequests = ConcurrentHashMap.newKeySet();
+        // Optionally start a small watchdog in the constructor
+        // That will periodically check for inactivity
+        startWatchdog();
+    }
+
+    public RequestTransactionManager(int numberOfConcurrentRequests) {
+        this(numberOfConcurrentRequests, "unknown");
     }
 
     public RequestTransactionManager() {
-        this(1);
+        this(1, "unknown");
+    }
+
+    private synchronized void ensureExecutorInitialized() {
+        if (executor == null || executor.isShutdown() || executor.isTerminated()) {
+            executor = Executors.newFixedThreadPool(4,
+                new BasicThreadFactory.Builder()
+                    .namingPattern("plc4x-tm-thread-" + protocolName + "-%d")
+                    .daemon(true)
+                    .priority(Thread.MAX_PRIORITY)
+                    .build()
+            );
+        }
+        lastUsageTime = System.currentTimeMillis();
+    }
+
+    private void startWatchdog() {
+        // For example, check every 30 seconds
+        MONITOR_EXECUTOR.scheduleWithFixedDelay(() -> checkIdleTime(), 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void checkIdleTime() {
+        // If no usage in the last X ms, shut down
+        long now = System.currentTimeMillis();
+        if (executor != null && !executor.isShutdown()) {
+            if ((now - lastUsageTime) > idleTimeoutMillis && runningRequests.isEmpty()) {
+                logger.info("Shutting down plc4x-tm-thread pool after {} ms of inactivity", idleTimeoutMillis);
+                shutdown();
+            }
+        }
     }
 
     public int getNumberOfConcurrentRequests() {
@@ -119,6 +177,7 @@ public class RequestTransactionManager {
             RequestTransaction next = workLog.poll();
             if (next != null) {
                 runningRequests.add(next);
+                ensureExecutorInitialized();
                 Future<?> completionFuture = executor.submit(next.operation);
                 next.setCompletionFuture(completionFuture);
             }
@@ -158,6 +217,8 @@ public class RequestTransactionManager {
         /** The iniital operation to perform to kick off the request */
         private Runnable operation;
         private Future<?> completionFuture;
+        // Add a handle to the scheduled timeout
+        private ScheduledFuture<?> timeoutFuture;
 
         public RequestTransaction(RequestTransactionManager parent, int transactionId) {
             this.parent = parent;
@@ -173,6 +234,10 @@ public class RequestTransactionManager {
         }
 
         public void endRequest() {
+            // Cancel the scheduled timeout if still pending
+            if (timeoutFuture != null) {
+                timeoutFuture.cancel(false);
+            }
             // Remove it from Running Requests
             parent.endRequest(this);
         }
@@ -187,12 +252,23 @@ public class RequestTransactionManager {
 
         public void setCompletionFuture(Future<?> completionFuture) {
             this.completionFuture = completionFuture;
+            // Also schedule a forced-timeout check
+            this.timeoutFuture = RequestTransactionManager.TIMEOUT_SCHEDULER.schedule(() -> {
+                if (!completionFuture.isDone()) {
+                    parent.failRequest(this);
+                    logger.warn("Transaction {} forcibly failed after max operation time", transactionId);
+                }
+            }, parent.maxOperationTimeMillis, TimeUnit.MILLISECONDS);
         }
 
         public void submit(Runnable operation) {
             logger.trace("Submission of transaction {}", transactionId);
-            setOperation(new TransactionOperation(transactionId, operation));
+            setOperation(new TransactionOperation(this, operation));
             parent.submit(this);
+        }
+
+        public int getTransactionId() {
+            return transactionId;
         }
 
         @Override
@@ -211,11 +287,13 @@ public class RequestTransactionManager {
     }
 
     static class TransactionOperation implements Runnable {
+        private final RequestTransaction transaction;
         private final int transactionId;
         private final Runnable delegate;
 
-        public TransactionOperation(int transactionId, Runnable delegate) {
-            this.transactionId = transactionId;
+        public TransactionOperation(RequestTransaction  transaction, Runnable delegate) {
+            this.transaction = transaction;
+            this.transactionId = transaction.getTransactionId();
             this.delegate = delegate;
         }
 
@@ -228,6 +306,7 @@ public class RequestTransactionManager {
                 delegate.run();
                 logger.trace("Completed execution of transaction {}", transactionId);
             }  catch (Exception ex) {
+                transaction.failRequest(ex);
                 logger.info(ex.getMessage());
             }
         }

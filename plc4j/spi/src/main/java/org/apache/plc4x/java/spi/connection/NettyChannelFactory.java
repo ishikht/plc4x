@@ -46,6 +46,7 @@ public abstract class NettyChannelFactory implements ChannelFactory {
 
     private final SocketAddress localAddress;
     private final SocketAddress remoteAddress;
+    private final EventLoopGroup group;
 
     protected NettyChannelFactory(SocketAddress remoteAddress) {
         this(null, remoteAddress);
@@ -54,6 +55,7 @@ public abstract class NettyChannelFactory implements ChannelFactory {
     protected NettyChannelFactory(SocketAddress localAddress, SocketAddress remoteAddress) {
         this.localAddress = localAddress;
         this.remoteAddress = remoteAddress;
+        this.group = new NioEventLoopGroup();
     }
 
     /**
@@ -90,7 +92,7 @@ public abstract class NettyChannelFactory implements ChannelFactory {
      * Transports which have to use a different EventLoopGroup have to override {#getEventLoopGroup()}.
      */
     public EventLoopGroup getEventLoopGroup() {
-        return new NioEventLoopGroup();
+        return group;
     }
 
     @Override
